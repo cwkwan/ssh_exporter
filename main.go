@@ -22,8 +22,8 @@ import (
 
   "github.com/alecthomas/kingpin/v2"
 
-  "github.com/prometheus/client_golang/prometheus"
   versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
+  "github.com/prometheus/client_golang/prometheus"
   "github.com/prometheus/client_golang/prometheus/promauto"
   "github.com/prometheus/client_golang/prometheus/promhttp"
   "github.com/prometheus/common/promslog"
@@ -47,23 +47,6 @@ var (
   hostkeyFile  = kingpin.Flag("hostkey.file", "Path to ssh known_hosts file, default to /etc/ssh/ssh_known_hosts").Default("/etc/ssh/ssh_known_hosts").Strings()
   toolkitFlags = kingpinflag.AddFlags(kingpin.CommandLine, ":9342")
 
-  scrapeRequestError = promauto.NewCounter(
-    prometheus.CounterOpts{
-      Namespace: namespace,
-      Name:      "scrape_request_errors_total",
-      Help:      "Errors in requests to the exporter",
-    },
-  )
-  scrapeCollectionDuration = promauto.NewHistogramVec(
-    prometheus.HistogramOpts{
-      Namespace: namespace,
-      Name:      "scrape_collection_duration_seconds",
-      Help:      "Total time taken from dialing to completed ssh session, before parsing.",
-      NativeHistogramBucketFactor: 1.1,
-
-    },
-    []string{"module"},
-  )
   sc = &SafeConfig{
     C: &config.Config{},
   }
@@ -83,6 +66,13 @@ var (
       },
     },
   }
+
+  scrapeRequestError = promauto.NewCounter(
+    prometheus.CounterOpts{
+      Name:      "scrape_request_errors_total",
+      Help:      "Errors in requests to the exporter",
+    },
+  )
 )
 
 type SafeConfig struct {
@@ -90,7 +80,7 @@ type SafeConfig struct {
   C  *config.Config
 }
 
-func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, telemetry collector.Telemetry) {
+func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, telemetry *collector.Telemetry) {
   query := r.URL.Query()
   target := query.Get("target")
   if len(query["target"]) != 1 || target == "" {
@@ -129,9 +119,7 @@ func (sc *SafeConfig) ReloadConfig(configPath string) (err error) {
   }
   sc.mu.Lock()
   sc.C = cfg
-  for module := range sc.C.Modules {
-    scrapeCollectionDuration.WithLabelValues(module)
-  }
+
   sc.mu.Unlock()
   return nil
 }
@@ -154,12 +142,18 @@ func main() {
     os.Exit(1)
   }
 
-  telemetry := collector.Telemetry{
-    ScrapeCollectionDuration: scrapeCollectionDuration,
+  telemetry := &collector.Telemetry{
     ScrapeRequestError: scrapeRequestError,
+    ScrapeCollectionDuration: promauto.NewHistogramVec(
+      prometheus.HistogramOpts{
+        Name:      "scrape_collection_duration_seconds",
+        Help:      "Total time taken from dialing to completed ssh session, before parsing.",
+        NativeHistogramBucketFactor: 1.1,
+      },
+      []string{"module"},
+    ),
     ScrapeDuration: promauto.NewHistogramVec(
       prometheus.HistogramOpts{
-        Namespace: namespace,
         Name:      "scrape_duration_seconds",
         Help:      "Total time taken from dialing to completed parsing.",
         NativeHistogramBucketFactor: 1.1,
@@ -168,14 +162,12 @@ func main() {
     ),
     ScrapeCount: promauto.NewCounter(
       prometheus.CounterOpts{
-        Namespace: namespace,
         Name:      "scrape_count_total",
         Help:      "Number of scrape sent.",
       },
     ),
     ScrapeInflight: promauto.NewGauge(
       prometheus.GaugeOpts{
-        Namespace: namespace,
         Name:      "scrape_in_flight",
         Help:      "Current number of scrapes being requested.",
       },
