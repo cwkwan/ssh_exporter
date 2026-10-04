@@ -1,3 +1,16 @@
+// Copyright 2026 Wing Kwan Chu
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package collector
 
 import (
@@ -26,8 +39,8 @@ var (
   ignoreHostKey    = kingpin.Flag("ignore-host-key", "Accept any host key, insecure. hostkey.file and known_hosts_file will be ignored").Default("false").Bool()
 )
 
+
 type Telemetry struct {
-  Desc                     *prometheus.Desc
   ScrapeCollectionDuration *prometheus.HistogramVec
   ScrapeDuration           *prometheus.HistogramVec
   ScrapeCount              prometheus.Counter
@@ -35,11 +48,12 @@ type Telemetry struct {
   ScrapeInflight           prometheus.Gauge
 }
 
+
 type Collector struct {
   name         string                    // module name
   ctx          context.Context
   target       string
-  telemetry    Telemetry
+  telemetry    *Telemetry
   module       *config.Module
   logger       *slog.Logger
   results      []Result
@@ -311,7 +325,8 @@ func hostKeyCallback(m *config.Module, logger *slog.Logger) ssh.HostKeyCallback 
   }
 }
 
-func New(ctx context.Context, target string, name string, module *config.Module, telemetry Telemetry, logger *slog.Logger) *Collector {
+func New(ctx context.Context, target string, name string, module *config.Module, telemetry *Telemetry, logger *slog.Logger) *Collector {
+
   var results []Result
 
   for _, job := range module.Jobs {
@@ -400,49 +415,4 @@ func New(ctx context.Context, target string, name string, module *config.Module,
     logger: logger,
     results : results,
   }
-}
-
-// expand %{ }
-func expand(logger *slog.Logger, s string, vars map[string]string) string {
-  var buf []byte
-  i := 0
-  for j := 0; j < len(s); j++ {
-    if s[j] == '%' && j+1 < len(s) {
-      if buf == nil {
-        buf = make([]byte, 0, 2*len(s))
-      }
-      buf = append(buf, s[i:j]...)
-      name, w := getVarName(logger, s[j+1:])
-      if name == "" {
-        buf = append(buf, s[j])
-      } else {
-        buf = append(buf, vars[name]...)
-      }
-      j += w
-      i = j + 1
-    }
-  }
-  if buf == nil {
-    return s
-  }
-  return string(buf) + s[i:]
-}
-
-func getVarName(logger *slog.Logger, s string) (string, int) {
-  if s[0] == '{' {
-    for i := 1; i < len(s) && isAlphaNum(s[i]); i++ {
-      if s[i] == '}' {
-        if i == 1 {
-          return "", 0
-        }
-        return s[1:i], i+1
-      }
-    }
-    return "", 0
-  }
-  return "", 0
-}
-
-func isAlphaNum(c uint8) bool {
-  return c == '#' || c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
