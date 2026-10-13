@@ -14,89 +14,101 @@
 package config
 
 import (
-  "os"
-  "fmt"
-  "errors"
+	"errors"
+	"fmt"
+	"os"
 
-  "github.com/goccy/go-yaml"
-  "github.com/cwkwan/go-grok"
+	"github.com/cwkwan/go-grok"
+	"github.com/goccy/go-yaml"
 )
 
 var (
-  DefaultHistogramOpts = Metric{
-    BucketNumber: 8,
-    BucketFactor: 1.1,
-  }
+	DefaultMetricOpts = Metric{
+		BucketNumber: 8,
+		BucketFactor: 1.1,
+	}
+	DefaultModuleOpts = Module{
+		PasswordEnv: false,
+		StartShell:  false,
+	}
 )
 
 type Config struct {
-  Modules map[string]*Module `yaml:"modules"`
+	Modules map[string]*Module `yaml:"modules"`
 }
 
 type Module struct {
-  User              string        `yaml:"user"`
-  Password          string        `yaml:"password"`
-  PrivateKey        string        `yaml:"private_key"`
-  Certificate       string        `yaml:"certificate"`
-  KnownHostsFile    string        `yaml:"known_hosts_file"`
-  HostKeyAlgorithms []string      `yaml:"host_key_algorithms"`
-  Timeout           int           `yaml:"timeout"`
-  GrokPatterns      GrokPattern   `yaml:"grok_pattern"`
-  Jobs              []Job         `yaml:"jobs"`
+	User              string      `yaml:"user"`
+	Password          string      `yaml:"password"`
+	PasswordEnv       bool        `yaml:"password_from_env,omitempty"`
+	StartShell        bool        `yaml:"start_shell,omitempty"`
+	PrivateKey        string      `yaml:"private_key"`
+	Certificate       string      `yaml:"certificate"`
+	KnownHostsFile    string      `yaml:"known_hosts_file"`
+	HostKeyAlgorithms []string    `yaml:"host_key_algorithms"`
+	Timeout           int         `yaml:"timeout"`
+	GrokPatterns      GrokPattern `yaml:"grok_patterns"`
+	Jobs              []Job       `yaml:"jobs"`
 }
 
 type Job struct {
-  Metrics     map[string]Metric  `yaml:"metrics"`
-  Command     string             `yaml:"command"`
+	Metrics  map[string]Metric `yaml:"metrics"`
+	Commands []string          `yaml:"commands"`
 }
 
 type Metric struct {
-  Help            string             `yaml:"help"`
-  GrokCompile     string             `yaml:"grok_compile"`
-  BucketNumber    uint32             `yaml:"bucket_number"`
-  BucketFactor    float64            `yaml:"bucket_factor"`
-  Labels          map[string]string  `yaml:"labels"`
-  Gauges          map[string]string  `yaml:"gauge"`
-  Counters        map[string]string  `yaml:"counter"`
-  Histograms      map[string]string  `yaml:"histogram"`
+	Help         string            `yaml:"help"`
+	GrokCompile  string            `yaml:"grok_compile"`
+	BucketNumber uint32            `yaml:"bucket_number"`
+	BucketFactor float64           `yaml:"bucket_factor"`
+	Labels       map[string]string `yaml:"labels"`
+	Gauges       map[string]string `yaml:"gauge"`
+	Counters     map[string]string `yaml:"counter"`
+	Histograms   map[string]string `yaml:"histogram"`
 }
 
 type GrokPattern struct {
-  *grok.Grok
+	*grok.Grok
+}
+
+func (m *Module) UnmarshalYAML(unmarshal func(any) error) error {
+	*m = DefaultModuleOpts
+	type alias Module
+	return unmarshal((*alias)(m))
 }
 
 func (c *Metric) UnmarshalYAML(unmarshal func(any) error) error {
-  *c = DefaultHistogramOpts
-  type alias Metric
-  return unmarshal((*alias)(c))
+	*c = DefaultMetricOpts
+	type alias Metric
+	return unmarshal((*alias)(c))
 }
 
 func (gp *GrokPattern) UnmarshalYAML(b []byte) error {
-  var m map[string]string
+	var m map[string]string
 
-  if err := yaml.Unmarshal(b, &m); err != nil {
-    return err
-  }
-  g := grok.New()
-  if err := g.AddPatterns(m); err != nil {
-    return fmt.Errorf("Grok pattern: %w", err)
-  }
+	if err := yaml.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	g := grok.New()
+	if err := g.AddPatterns(m); err != nil {
+		return fmt.Errorf("Grok pattern: %w", err)
+	}
 
-  gp.Grok = g
-  return nil
+	gp.Grok = g
+	return nil
 }
 
 func LoadFile(configPath string) (*Config, error) {
-  cfg := &Config{}
+	cfg := &Config{}
 
-  config, err := os.ReadFile(configPath)
-  if err != nil {
-    return nil, err
-  }
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
 
-  if err := yaml.Unmarshal(config, cfg); err != nil {
-    return nil, errors.New(yaml.FormatError(err, false, false))
-  }
+	if err := yaml.Unmarshal(config, cfg); err != nil {
+		return nil, errors.New(yaml.FormatError(err, false, false))
+	}
 
-  return cfg, nil
+	return cfg, nil
 }
