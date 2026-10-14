@@ -41,11 +41,11 @@ var (
 )
 
 type Telemetry struct {
-	ScrapeCollectionDuration *prometheus.HistogramVec
-	ScrapeDuration           *prometheus.HistogramVec
-	ScrapeCount              prometheus.Counter
-	ScrapeRequestError       prometheus.Counter
-	ScrapeInflight           prometheus.Gauge
+	ScrapeCollectDuration *prometheus.HistogramVec
+	ScrapeDuration        *prometheus.HistogramVec
+	ScrapeCount           prometheus.Counter
+	ScrapeRequestError    prometheus.Counter
+	ScrapeInflight        prometheus.Gauge
 }
 
 type Collector struct {
@@ -106,13 +106,27 @@ func (c Collector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c Collector) Collect(ch chan<- prometheus.Metric) {
 	logger := c.logger.With("module", c.name)
-
+	scrapeCollectDurationDesc := prometheus.NewDesc(
+		"scrape_collect_duration_seconds",
+		"scrape_duration_seconds minus the time taken to parse the command outputs.",
+		nil, nil)
+	scrapeDurationDesc := prometheus.NewDesc(
+		"scrape_duration_seconds",
+		"Total time taken from dialing, to running commands, to closed ssh session, to complete parsing.",
+		nil, nil)
 	start := time.Now()
 	c.telemetry.ScrapeInflight.Inc()
 	c.telemetry.ScrapeCount.Inc()
 	results, _ := run(c, logger)
-	c.telemetry.ScrapeCollectionDuration.WithLabelValues(c.name).Observe(time.Since(start).Seconds())
+	duration := time.Since(start).Seconds()
 	c.telemetry.ScrapeInflight.Dec()
+	c.telemetry.ScrapeCollectDuration.WithLabelValues(c.name).Observe(duration)
+	scrapeCollectDuration := prometheus.MustNewConstMetric(
+		scrapeCollectDurationDesc,
+		prometheus.GaugeValue,
+		duration,
+	)
+	ch <- scrapeCollectDuration
 
 	// results can be nil/partial with errors
 	g := c.module.GrokPatterns
@@ -181,8 +195,15 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 			}
 		}
 	}
-	logger.Debug("Finished parsing", "duration_seconds", time.Since(start).Seconds())
-	c.telemetry.ScrapeDuration.WithLabelValues(c.name).Observe(time.Since(start).Seconds())
+	duration = time.Since(start).Seconds()
+	logger.Debug("Finished parsing", "duration_seconds", duration)
+	c.telemetry.ScrapeDuration.WithLabelValues(c.name).Observe(duration)
+	scrapeDuration := prometheus.MustNewConstMetric(
+		scrapeDurationDesc,
+		prometheus.GaugeValue,
+		duration,
+	)
+	ch <- scrapeDuration
 }
 
 func run(c Collector, logger *slog.Logger) ([]Result, error) {
