@@ -65,11 +65,12 @@ type Result struct {
 }
 
 type Metric struct {
-	name         string
-	grok         string
-	labelvalues  []string
-	constMetrics []ConstMetric
-	histograms   []Histogram
+	name                string
+	grok                string
+	continueOnDuplicate bool
+	labelvalues         []string
+	constMetrics        []ConstMetric
+	histograms          []Histogram
 }
 
 type ConstMetric struct {
@@ -167,15 +168,17 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 					)
 					if collected[key] {
 						logger.Warn("Multiple results returned for metric with the exact same name and label values", "metric fqname", constMetric.fqname, "label values", labelvalues)
-						break
+						if !metric.continueOnDuplicate {
+							break
+						}
 					} else {
 						collected[key] = true
 						ch <- m
 					}
 				}
 			}
-			// Need to loop matches separately for histogram, constmetric
-			// because we cannot tell if it will be a vector in advance.
+			// Need to loop matches separately for histogram
+			// can't tell if it will become a vector until next line is parsed
 			for _, histogram := range metric.histograms {
 				m := prometheus.NewHistogramVec(histogram.opts, histogram.labelnames)
 				for _, match := range matches {
@@ -499,11 +502,12 @@ func New(ctx context.Context, target string, name string, module *config.Module,
 			}
 
 			metric := Metric{
-				name:         parentname,
-				grok:         metric.GrokCompile,
-				labelvalues:  labelvalues,
-				constMetrics: constMetrics,
-				histograms:   histograms,
+				name:                parentname,
+				grok:                metric.GrokCompile,
+				continueOnDuplicate: metric.ContineOnDuplicate,
+				labelvalues:         labelvalues,
+				constMetrics:        constMetrics,
+				histograms:          histograms,
 			}
 			metrics[j] = metric
 			j++

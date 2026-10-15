@@ -24,8 +24,9 @@ import (
 
 var (
 	DefaultMetricOpts = Metric{
-		BucketNumber: 8,
-		BucketFactor: 1.1,
+		BucketNumber:       8,
+		BucketFactor:       1.1,
+		ContineOnDuplicate: false,
 	}
 	DefaultModuleOpts = Module{
 		PasswordEnv: false,
@@ -57,14 +58,15 @@ type Job struct {
 }
 
 type Metric struct {
-	Help         string            `yaml:"help"`
-	GrokCompile  string            `yaml:"grok_compile"`
-	BucketNumber uint32            `yaml:"bucket_number"`
-	BucketFactor float64           `yaml:"bucket_factor"`
-	Labels       map[string]string `yaml:"labels"`
-	Gauges       map[string]string `yaml:"gauge"`
-	Counters     map[string]string `yaml:"counter"`
-	Histograms   map[string]string `yaml:"histogram"`
+	Help               string            `yaml:"help"`
+	GrokCompile        string            `yaml:"grok_compile"`
+	ContineOnDuplicate bool              `yaml:"continue_on_duplicate,omitempty"`
+	BucketNumber       uint32            `yaml:"bucket_number"`
+	BucketFactor       float64           `yaml:"bucket_factor"`
+	Labels             map[string]string `yaml:"labels"`
+	Gauges             map[string]string `yaml:"gauge"`
+	Counters           map[string]string `yaml:"counter"`
+	Histograms         map[string]string `yaml:"histogram"`
 }
 
 type GrokPattern struct {
