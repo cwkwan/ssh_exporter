@@ -365,16 +365,41 @@ func executeInteractive(client *ssh.Client, cmds []string, wg *sync.WaitGroup, l
 		}
 	}()
 
-	bytes, err := io.ReadAll(reader)
-	if err != nil {
-		logger.Error("Error reading interactive session stdout pipe", "err", err)
-		return nil, err
-	}
-	if err := session.Wait(); err != nil {
-		logger.Warn("Non nil err returned from command", "cmd", cmds[0], "err", err)
+	type outputs struct {
+		bytes []byte
+		err   error
 	}
 
-	return bytes, nil
+	waitOut := make(chan outputs, 1)
+	go func() {
+		bytes, err := io.ReadAll(reader)
+		waitOut <- outputs{bytes: bytes, err: err}
+		close(waitOut)
+	}()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.Wait()
+		close(waitDone)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	select {
+	case err := <-waitDone:
+		result := <-waitOut
+		if err != nil {
+			logger.Warn("Non nil err returned from command starting", "cmd", cmds[0], "err", err)
+		}
+		if result.err != nil {
+			logger.Error("Error reading bulk session stdout pipe", "err", err)
+			return nil, err
+		}
+		return result.bytes, nil
+	case <-ctx.Done():
+		return nil, errors.New("session execution timed out; abandoning session")
+	}
 }
 
 func parse(rs map[string]string, value string) string {
