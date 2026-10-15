@@ -235,7 +235,7 @@ func run(c Collector, logger *slog.Logger) ([]Result, error) {
 	defer client.Close()
 
 	var wg sync.WaitGroup
-	for i, _ := range c.results {
+	for i := range c.results {
 		wg.Add(1)
 		go func() {
 			var data []byte
@@ -261,6 +261,7 @@ func run(c Collector, logger *slog.Logger) ([]Result, error) {
 func executeBulk(client *ssh.Client, cmds []string, wg *sync.WaitGroup, logger *slog.Logger) ([]byte, error) {
 	defer wg.Done()
 	cmd := strings.Join(cmds, ";")
+
 	session, err := client.NewSession()
 	if err != nil {
 		logger.Error("Error creating ssh session", "err", err)
@@ -278,18 +279,42 @@ func executeBulk(client *ssh.Client, cmds []string, wg *sync.WaitGroup, logger *
 		return nil, err
 	}
 
-	bytes, err := io.ReadAll(reader)
-	if err != nil {
-		logger.Error("Error reading bulk session stdout pipe", "err", err)
-		return nil, err
-	}
-	if err := session.Wait(); err != nil {
-		logger.Warn("Non nil err returned from command", "cmd", cmd, "err", err)
+	type outputs struct {
+		bytes []byte
+		err   error
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	waitOut := make(chan outputs, 1)
+	go func() {
+		bytes, err := io.ReadAll(reader)
+		waitOut <- outputs{bytes: bytes, err: err}
+		close(waitOut)
+	}()
 
-	return bytes, nil
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.Wait()
+		close(waitDone)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	select {
+	case err := <-waitDone:
+		result := <-waitOut
+		if err != nil {
+			logger.Warn("Non nil err returned from command", "cmd", cmd, "err", err)
+		}
+		if result.err != nil {
+			logger.Error("Error reading bulk session stdout pipe", "err", err)
+			return nil, err
+		}
+		return result.bytes, nil
+	case <-ctx.Done():
+		return nil, errors.New("session execution timed out; abandoning session")
+	}
+
 }
 
 func executeInteractive(client *ssh.Client, cmds []string, wg *sync.WaitGroup, logger *slog.Logger) ([]byte, error) {
@@ -302,8 +327,8 @@ func executeInteractive(client *ssh.Client, cmds []string, wg *sync.WaitGroup, l
 	defer session.Close()
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          0,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
+		ssh.TTY_OP_ISPEED: 115200,
+		ssh.TTY_OP_OSPEED: 115200,
 	}
 
 	if err := session.RequestPty("vt100", 100, 100, modes); err != nil {
