@@ -118,7 +118,10 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 	start := time.Now()
 	c.telemetry.ScrapeInflight.Inc()
 	c.telemetry.ScrapeCount.Inc()
-	results, _ := run(c, logger)
+	results, err := run(c, logger)
+	if err != nil {
+		return
+	}
 	duration := time.Since(start).Seconds()
 	c.telemetry.ScrapeInflight.Dec()
 	c.telemetry.ScrapeCollectDuration.WithLabelValues(c.name).Observe(duration)
@@ -238,13 +241,7 @@ func run(c Collector, logger *slog.Logger) ([]Result, error) {
 	for i := range c.results {
 		wg.Add(1)
 		go func() {
-			var data []byte
-			var err error
-			if c.module.StartShell {
-				data, err = executeInteractive(client, c.results[i].job, &wg, logger)
-			} else {
-				data, err = executeBulk(client, c.results[i].job, &wg, logger)
-			}
+			data, err := execute(client, c.module.StartShell, c.results[i].job, &wg, logger)
 			if err != nil {
 				logger.Error("Error executing job", "job number", i, "target", c.target, "module", c.module, "err", err)
 				return
@@ -258,10 +255,8 @@ func run(c Collector, logger *slog.Logger) ([]Result, error) {
 	return c.results, nil
 }
 
-func executeBulk(client *ssh.Client, cmds []string, wg *sync.WaitGroup, logger *slog.Logger) ([]byte, error) {
+func execute(client *ssh.Client, startShell bool, cmds []string, wg *sync.WaitGroup, logger *slog.Logger) ([]byte, error) {
 	defer wg.Done()
-	cmd := strings.Join(cmds, ";")
-
 	session, err := client.NewSession()
 	if err != nil {
 		logger.Error("Error creating ssh session", "err", err)
@@ -274,96 +269,47 @@ func executeBulk(client *ssh.Client, cmds []string, wg *sync.WaitGroup, logger *
 		logger.Error("Error creating session stdout pipe", "err", err)
 		return nil, err
 	}
-	if err := session.Start(cmd); err != nil {
-		logger.Error("Error starting command", "cmd", cmd, "err", err)
-		return nil, err
-	}
-
-	type outputs struct {
-		bytes []byte
-		err   error
-	}
-
-	waitOut := make(chan outputs, 1)
-	go func() {
-		bytes, err := io.ReadAll(reader)
-		waitOut <- outputs{bytes: bytes, err: err}
-		close(waitOut)
-	}()
-
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- session.Wait()
-		close(waitDone)
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-waitDone:
-		result := <-waitOut
-		if err != nil {
-			logger.Warn("Non nil err returned from command", "cmd", cmd, "err", err)
+	if startShell {
+		modes := ssh.TerminalModes{
+			ssh.ECHO:          0,
+			ssh.TTY_OP_ISPEED: 115200,
+			ssh.TTY_OP_OSPEED: 115200,
 		}
-		if result.err != nil {
-			logger.Error("Error reading bulk session stdout pipe", "err", err)
+
+		if err := session.RequestPty("vt100", 100, 100, modes); err != nil {
+			logger.Error("Error requestinng PTY", "err", err)
 			return nil, err
 		}
-		return result.bytes, nil
-	case <-ctx.Done():
-		return nil, errors.New("session execution timed out; abandoning session")
-	}
 
-}
-
-func executeInteractive(client *ssh.Client, cmds []string, wg *sync.WaitGroup, logger *slog.Logger) ([]byte, error) {
-	defer wg.Done()
-	session, err := client.NewSession()
-	if err != nil {
-		logger.Error("Error creating ssh session", "err", err)
-		return nil, err
-	}
-	defer session.Close()
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          0,
-		ssh.TTY_OP_ISPEED: 115200,
-		ssh.TTY_OP_OSPEED: 115200,
-	}
-
-	if err := session.RequestPty("vt100", 100, 100, modes); err != nil {
-		logger.Error("Error requestinng PTY", "err", err)
-		return nil, err
-	}
-
-	stdinPipe, err := session.StdinPipe()
-	if err != nil {
-		logger.Error("Error creating StdinPipe with PTY session", "err", err)
-		return nil, err
-	}
-	reader, err := session.StdoutPipe()
-	if err != nil {
-		logger.Error("Error creating session stdout pipe", "err", err)
-		return nil, err
-	}
-
-	if err := session.Shell(); err != nil {
-		logger.Error("Error starting Shell with PTY session", "err", err)
-		return nil, err
-	}
-
-	go func() {
-		defer stdinPipe.Close()
-		for _, cmd := range cmds {
-			cmd = cmd + "\n"
-			_, err := stdinPipe.Write([]byte(cmd))
-			if err != nil {
-				logger.Error("Error writing cmd to StdinPip", "err", err)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
+		stdinPipe, err := session.StdinPipe()
+		if err != nil {
+			logger.Error("Error creating StdinPipe with PTY session", "err", err)
+			return nil, err
 		}
-	}()
+
+		if err := session.Shell(); err != nil {
+			logger.Error("Error starting Shell with PTY session", "err", err)
+			return nil, err
+		}
+		go func() {
+			defer stdinPipe.Close()
+			for _, cmd := range cmds {
+				cmd = cmd + "\n"
+				_, err := stdinPipe.Write([]byte(cmd))
+				if err != nil {
+					logger.Error("Error writing cmd to StdinPip", "cmd", cmd, "err", err)
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	} else {
+		cmd := strings.Join(cmds, ";")
+		if err := session.Start(cmd); err != nil {
+			logger.Error("Error starting command", "cmd", cmd, "err", err)
+			return nil, err
+		}
+	}
 
 	type outputs struct {
 		bytes []byte
@@ -390,7 +336,7 @@ func executeInteractive(client *ssh.Client, cmds []string, wg *sync.WaitGroup, l
 	case err := <-waitDone:
 		result := <-waitOut
 		if err != nil {
-			logger.Warn("Non nil err returned from command starting", "cmd", cmds[0], "err", err)
+			logger.Warn("Non nil err returned from command starting", "cmds", cmds, "err", err)
 		}
 		if result.err != nil {
 			logger.Error("Error reading bulk session stdout pipe", "err", err)
@@ -453,13 +399,44 @@ func authMethod(m *config.Module, logger *slog.Logger) (ssh.AuthMethod, error) {
 		if m.PrivateKey != "" {
 			key, err := os.ReadFile(m.PrivateKey)
 			if err != nil {
-				logger.Error("unable to read private key", "err", err, "private_key file", m.PrivateKey)
+				logger.Error("Failed to read private key", "err", err, "private_key file", m.PrivateKey)
 				return nil, err
 			}
-			signer, err := ssh.ParsePrivateKey(key)
-			if err != nil {
-				logger.Error("unable to parse private key", "err", err)
-				return nil, err
+			var signer ssh.Signer
+			if m.PrivateKeyPass != "" {
+				signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(m.PrivateKeyPass))
+				if err != nil {
+					logger.Error("Failed to parse private key with passphrase", "key", m.PrivateKey, "err", err)
+					return nil, err
+				}
+			} else {
+				signer, err = ssh.ParsePrivateKey(key)
+				if err != nil {
+					logger.Error("Failed to parse private key", "key", m.PrivateKey, "err", err)
+					return nil, err
+				}
+			}
+			if m.Certificate != "" {
+				certificate, err := os.ReadFile(m.Certificate)
+				if err != nil {
+					logger.Error("Failed to read certificate", "certificate", m.Certificate, "err", err)
+					return nil, err
+				}
+				pubKey, _, _, _, err := ssh.ParseAuthorizedKey(certificate)
+				if err != nil {
+					logger.Error("Failed to parse certificate", "certificate", m.Certificate, "err", err)
+					return nil, err
+				}
+				cert, ok := pubKey.(*ssh.Certificate)
+				if !ok {
+					logger.Error("Certificate is not an SSH certificate", "certificate", m.Certificate)
+					return nil, err
+				}
+				signer, err = ssh.NewCertSigner(cert, signer)
+				if err != nil {
+					logger.Error("Failed to create certificate signer", "certificate", m.Certificate, "key", m.PrivateKey)
+					return nil, err
+				}
 			}
 			auth = ssh.PublicKeys(signer)
 		} else {
