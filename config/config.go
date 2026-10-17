@@ -29,8 +29,9 @@ var (
 		ContineOnDuplicate: false,
 	}
 	DefaultModuleOpts = Module{
-		PasswordEnv: false,
-		StartShell:  false,
+		PasswordEnv:    false,
+		StartShell:     false,
+		PrivateKeyPass: "",
 	}
 )
 
@@ -44,6 +45,7 @@ type Module struct {
 	PasswordEnv       bool        `yaml:"password_from_env,omitempty"`
 	StartShell        bool        `yaml:"start_shell,omitempty"`
 	PrivateKey        string      `yaml:"private_key"`
+	PrivateKeyPass    string      `yaml:"private_key_passpharse"`
 	Certificate       string      `yaml:"certificate"`
 	KnownHostsFile    string      `yaml:"known_hosts_file"`
 	HostKeyAlgorithms []string    `yaml:"host_key_algorithms"`
