@@ -16,21 +16,16 @@ package collector
 import (
 	"context"
 	"errors"
-	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/cwkwan/ssh_exporter/config"
-	"github.com/expr-lang/expr"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -84,15 +79,6 @@ type Histogram struct {
 	opts       prometheus.HistogramOpts
 	value      string
 	labelnames []string
-}
-
-func hashStringSlice(slice []string) uint64 {
-	h := fnv.New64a()
-	for _, str := range slice {
-		h.Write([]byte(str))
-		h.Write([]byte{0}) // Null byte separator ensures structure boundaries are preserved
-	}
-	return h.Sum64()
 }
 
 func (c Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -154,14 +140,9 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 				for _, match := range matches {
 					labelvalues := parseLabel(match, metric.labelvalues)
 					key := hashStringSlice(labelvalues)
-					var value float64
-					var err error
-					value, err = toFloat(constMetric.value)
-					if err != nil {
-						value, err = toFloat(parse(match, constMetric.value))
-						if err != nil {
-							logger.Error("Error converting value to float", "value", constMetric.value, "err", err)
-						}
+					value, err := parse(match, constMetric.value) // true,false will be parsed as boolean
+					if err != nil {                               // so they won't work as grok field
+						logger.Error("Error parsing metric value", "value", constMetric.value, "err", err)
 					}
 					m := prometheus.MustNewConstMetric(
 						constMetric.desc,
@@ -186,14 +167,9 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 				m := prometheus.NewHistogramVec(histogram.opts, histogram.labelnames)
 				for _, match := range matches {
 					labelvalues := parseLabel(match, metric.labelvalues)
-					var value float64
-					var err error
-					value, err = toFloat(histogram.value)
-					if err != nil {
-						value, err = toFloat(parse(match, histogram.value))
-						if err != nil {
-							logger.Error("Error converting value to float", "value", histogram.value, "err", err)
-						}
+					value, err := parse(match, histogram.value) // true,false will be parsed as boolean
+					if err != nil {                             // so they won't work as grok field
+						logger.Error("Error parsing metric value", "value", histogram.value, "err", err)
 					}
 					m.WithLabelValues(labelvalues...).Observe(value)
 				}
@@ -222,7 +198,7 @@ func run(c Collector, logger *slog.Logger) ([]Result, error) {
 			MACs:         algorithms.MACs,
 		},
 		User:            c.module.User,
-		Auth:            []ssh.AuthMethod{auth},
+		Auth:            auth,
 		HostKeyCallback: hostKeyCallback(c.module, logger),
 		// Should check if hostKey algorithm is included in
 		// algorithms.HostKeys.
@@ -348,103 +324,63 @@ func execute(client *ssh.Client, startShell bool, cmds []string, wg *sync.WaitGr
 	}
 }
 
-func parse(rs map[string]string, value string) string {
+func authMethod(m *config.Module, logger *slog.Logger) ([]ssh.AuthMethod, error) {
+	var auth []ssh.AuthMethod
 
-	program, err := expr.Compile(value, expr.Env(rs))
-	if err != nil {
-		return value
-	}
-	v, err := expr.Run(program, rs)
-	if err != nil {
-		return value
-	}
-
-	return fmt.Sprint(v)
-}
-
-func parseLabel(rs map[string]string, labels []string) []string {
-	values := make([]string, len(labels))
-	for i, label := range labels {
-		value := parse(rs, label)
-		values[i] = value
-	}
-	return values
-}
-
-func toFloat(s string) (float64, error) {
-	var err error
-	var v float64
-	if v, err = strconv.ParseFloat(s, 64); err == nil {
-		return v, nil
-	}
-
-	if ok, err := strconv.ParseBool(s); err == nil {
-		if ok {
-			return 1.0, nil
-		}
-		return 0.0, nil
-	}
-
-	if s == "<nil>" {
-		return math.NaN(), nil
-	}
-	return v, err
-}
-
-func authMethod(m *config.Module, logger *slog.Logger) (ssh.AuthMethod, error) {
-	var auth ssh.AuthMethod
 	if m.Password != "" {
-		auth = ssh.Password(m.Password)
-	} else {
-		if m.PrivateKey != "" {
-			key, err := os.ReadFile(m.PrivateKey)
-			if err != nil {
-				logger.Error("Failed to read private key", "err", err, "private_key file", m.PrivateKey)
-				return nil, err
-			}
-			var signer ssh.Signer
-			if m.PrivateKeyPass != "" {
-				signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(m.PrivateKeyPass))
-				if err != nil {
-					logger.Error("Failed to parse private key with passphrase", "key", m.PrivateKey, "err", err)
-					return nil, err
-				}
-			} else {
-				signer, err = ssh.ParsePrivateKey(key)
-				if err != nil {
-					logger.Error("Failed to parse private key", "key", m.PrivateKey, "err", err)
-					return nil, err
-				}
-			}
-			if m.Certificate != "" {
-				certificate, err := os.ReadFile(m.Certificate)
-				if err != nil {
-					logger.Error("Failed to read certificate", "certificate", m.Certificate, "err", err)
-					return nil, err
-				}
-				pubKey, _, _, _, err := ssh.ParseAuthorizedKey(certificate)
-				if err != nil {
-					logger.Error("Failed to parse certificate", "certificate", m.Certificate, "err", err)
-					return nil, err
-				}
-				cert, ok := pubKey.(*ssh.Certificate)
-				if !ok {
-					logger.Error("Certificate is not an SSH certificate", "certificate", m.Certificate)
-					return nil, err
-				}
-				signer, err = ssh.NewCertSigner(cert, signer)
-				if err != nil {
-					logger.Error("Failed to create certificate signer", "certificate", m.Certificate, "key", m.PrivateKey)
-					return nil, err
-				}
-			}
-			auth = ssh.PublicKeys(signer)
-		} else {
-			err := errors.New("password and private_key not specified")
-			logger.Error("either password or private_key need to be provided", "err", err)
+		auth = append(auth, ssh.Password(m.Password))
+	}
+	if m.PrivateKey != "" {
+		key, err := os.ReadFile(m.PrivateKey)
+		if err != nil {
+			logger.Error("Failed to read private key", "err", err, "private_key file", m.PrivateKey)
 			return nil, err
 		}
+		var signer ssh.Signer
+		if m.PrivateKeyPass != "" {
+			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(m.PrivateKeyPass))
+			if err != nil {
+				logger.Error("Failed to parse private key with passphrase", "key", m.PrivateKey, "err", err)
+				return nil, err
+			}
+		} else {
+			signer, err = ssh.ParsePrivateKey(key)
+			if err != nil {
+				logger.Error("Failed to parse private key", "key", m.PrivateKey, "err", err)
+				return nil, err
+			}
+		}
+		if m.Certificate != "" {
+			certificate, err := os.ReadFile(m.Certificate)
+			if err != nil {
+				logger.Error("Failed to read certificate", "certificate", m.Certificate, "err", err)
+				return nil, err
+			}
+			pubKey, _, _, _, err := ssh.ParseAuthorizedKey(certificate)
+			if err != nil {
+				logger.Error("Failed to parse certificate", "certificate", m.Certificate, "err", err)
+				return nil, err
+			}
+			cert, ok := pubKey.(*ssh.Certificate)
+			if !ok {
+				logger.Error("Certificate is not an SSH certificate", "certificate", m.Certificate)
+				return nil, err
+			}
+			signer, err = ssh.NewCertSigner(cert, signer)
+			if err != nil {
+				logger.Error("Failed to create certificate signer", "certificate", m.Certificate, "key", m.PrivateKey)
+				return nil, err
+			}
+		}
+		auth = append(auth, ssh.PublicKeys(signer))
 	}
+
+	if len(auth) == 0 {
+		err := errors.New("No authentication specified")
+		logger.Error("either password or private_key need to be provided", "err", err)
+		return nil, err
+	}
+
 	return auth, nil
 }
 
@@ -468,6 +404,11 @@ func hostKeyCallback(m *config.Module, logger *slog.Logger) ssh.HostKeyCallback 
 func New(ctx context.Context, target string, name string, module *config.Module, telemetry *Telemetry, logger *slog.Logger) *Collector {
 
 	var results []Result
+
+	module.Password = expand(module.Password)
+	module.PrivateKey = expand(module.PrivateKey)
+	module.PrivateKeyPass = expand(module.PrivateKeyPass)
+	module.Certificate = expand(module.Certificate)
 
 	for _, job := range module.Jobs {
 		metrics := make([]Metric, len(job.Metrics))

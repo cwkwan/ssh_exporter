@@ -29,7 +29,6 @@ var (
 		ContineOnDuplicate: false,
 	}
 	DefaultModuleOpts = Module{
-		PasswordEnv:    false,
 		StartShell:     false,
 		PrivateKeyPass: "",
 	}
@@ -42,7 +41,6 @@ type Config struct {
 type Module struct {
 	User              string      `yaml:"user"`
 	Password          string      `yaml:"password"`
-	PasswordEnv       bool        `yaml:"password_from_env,omitempty"`
 	StartShell        bool        `yaml:"start_shell,omitempty"`
 	PrivateKey        string      `yaml:"private_key"`
 	PrivateKeyPass    string      `yaml:"private_key_passpharse"`
