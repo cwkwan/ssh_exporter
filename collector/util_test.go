@@ -14,6 +14,7 @@
 package collector
 
 import (
+	"math"
 	"os"
 	"testing"
 
@@ -40,68 +41,81 @@ func TestParse(t *testing.T) {
 		"s1": "123",
 		"s2": "456",
 		"c":  "string",
+		"d":  "",
 	}
-	exp := "s1 + s2"
 
-	v := parse(s, exp)
-	if v != "123456" {
-		t.Errorf(`v = %v, expect "123456"`, v)
+	exp := "s1 + s2"
+	v, err := parse(s, exp)
+	if err != nil {
+		t.Errorf(`Error returned from parse(%v, %v). Expect none, err returned: %v`, s, exp, err)
+	}
+	if v != 123456 {
+		t.Errorf(`v = %v, expect 123456`, v)
 	}
 
 	exp = "float(s1) + float(s2)"
-
-	v = parse(s, exp)
-	if v != "579" {
-		t.Errorf(`v = %v, expect "579"`, v)
+	v, err = parse(s, exp)
+	if err != nil {
+		t.Errorf(`Error returned from parse(%v, %v). Expect none, err returned: %v`, s, exp, err)
+	}
+	if v != 579 {
+		t.Errorf(`v = %v, expect 579`, v)
 	}
 
 	exp = "float(c)"
-	v = parse(s, exp)
-	if v != "float(c)" {
-		t.Errorf(`v = %v, expect "float(c)"`, v)
+	v, err = parse(s, exp)
+	if !math.IsNaN(v) {
+		t.Errorf(`v = %v, expect math.NaN`, v)
 	}
 
+	exp = "d"
+	v, err = parse(s, exp)
+	if !math.IsNaN(v) {
+		t.Errorf(`v = %v, expect math.NaN`, v)
+	}
+
+	exp = "5"
+	v, err = parse(s, exp)
+	if v != 5 {
+		t.Errorf(`v = %v, expect 5`, v)
+	}
 }
 
 func TestToFloat(t *testing.T) {
 	s := "1.0"
-	c, _ := toFloat(s)
-
 	v, err := toFloat(s)
 	if err != nil {
-		t.Errorf(`Error returned from parsing s=%v. Expect none, err returned: %v`, s, err)
+		t.Errorf(`Error returned from toFloat("%v"). Expect none, err returned: %v`, s, err)
 	}
 	if v != 1.0 {
-		t.Errorf(`toFloat(s) = %v", want %v`, v, c)
+		t.Errorf(`toFloat("%v"), want %v`, s, v)
 	}
 
 	s = "true"
-	c, _ = toFloat(s)
 	v, err = toFloat(s)
 	if err != nil {
-		t.Errorf(`Error returned from parsing s=%v. Expect none, err returned: %v`, s, err)
+		t.Errorf(`Error returned from toFloat("%v"). Expect none, err returned: %v`, s, err)
 	}
 	if v != 1.0 {
-		t.Errorf(`toFloat(s) = %v", want %v`, v, c)
+		t.Errorf(`toFloat("%v"), want %v`, s, v)
 	}
 
 	s = "false"
-	c, _ = toFloat(s)
 	v, err = toFloat(s)
 	if err != nil {
-		t.Errorf(`Error returned from parsing s=%v. Expect none, err returned: %v`, s, err)
+		t.Errorf(`Error returned from toFloat("%v"). Expect none, err returned: %v`, s, err)
 	}
 	if v != 0.0 {
-		t.Errorf(`toFloat(s) = %v", want %v`, v, c)
+		t.Errorf(`toFloat("%v"), want %v`, s, v)
 	}
 
-	s = "false"
-	c, _ = toFloat(s)
+	s = ""
 	v, err = toFloat(s)
-	if err != nil {
-		t.Errorf(`Error returned from parsing s=%v. Expect none, err returned: %v`, s, err)
+	if err == nil {
+		t.Errorf(`No Error returned from toFloat("%v"). Expecting error, getting none`, s)
 	}
-	if v != 0.0 {
-		t.Errorf(`toFloat(s) = %v", want %v`, v, c)
+	if !math.IsNaN(v) {
+		t.Errorf(`toFloat("%v") = %v, expect math.NaN`, s, v)
 	}
+
 }
