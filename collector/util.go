@@ -92,8 +92,5 @@ func toFloat(s string) (float64, error) {
 		return 0.0, nil
 	}
 
-	if s == "<nil>" {
-		return math.NaN(), nil
-	}
-	return v, err
+	return math.NaN(), err
 }
