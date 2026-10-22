@@ -17,23 +17,63 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"os"
 	"strconv"
 
 	"github.com/expr-lang/expr"
 )
 
-func expand(s string) string {
-	v := os.Expand(s, func(s string) string {
-		if s == "$" {
-			return "$"
+// Expand replaces ${var} or $var in the string based on the mapping function.
+// For example, [os.ExpandEnv](s) is equivalent to [os.Expand](s, [os.Getenv]).
+func expand(s string, mapping func(string) string) string {
+	var buf []byte
+	// assume only ASCII in ${}
+	i := 0
+	for j := 0; j < len(s); j++ {
+		if (s[j] == '$' || s[j] == '@') && j+1 < len(s) {
+			if buf == nil {
+				buf = make([]byte, 0, 2*len(s))
+			}
+			buf = append(buf, s[i:j]...)
+			name, w := getVarName(s[j+1:])
+			if name == "" {
+				buf = append(buf, s[j:j+w+1]...)
+			} else {
+				if j > 0 && s[j-1] == '\\' {
+					buf = append(buf[:len(buf)-1], s[j:j+w+1]...)
+				} else {
+					buf = append(buf, mapping(string(s[j])+name)...)
+				}
+			}
+			j += w
+			i = j + 1
 		}
-		if v := os.Getenv(s); v != "" {
-			return v
+	}
+	if buf == nil {
+		return s
+	}
+	return string(buf) + s[i:]
+}
+
+func getVarName(s string) (string, int) {
+	if s[0] == '{' {
+		for i := 1; i < len(s); i++ {
+			if isBeacon(s[i]) {
+				return "", i
+			}
+			if s[i] == '}' {
+				if i == 1 {
+					return "", 2
+				}
+				return s[1:i], i + 1
+			}
 		}
-		return ""
-	})
-	return v
+		return "", 1
+	}
+	return "", 0
+}
+
+func isBeacon(c uint8) bool {
+	return c == '$' || c == '@' || c == '\\' || c == '{' || c == '/' || c == '?'
 }
 
 func hashStringSlice(slice []string) uint64 {

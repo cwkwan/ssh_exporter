@@ -405,10 +405,10 @@ func New(ctx context.Context, target string, name string, module *config.Module,
 
 	var results []Result
 
-	module.Password = expand(module.Password)
-	module.PrivateKey = expand(module.PrivateKey)
-	module.PrivateKeyPass = expand(module.PrivateKeyPass)
-	module.Certificate = expand(module.Certificate)
+	//	module.Password = expand(module.Password)
+	//	module.PrivateKey = expand(module.PrivateKey)
+	//	module.PrivateKeyPass = expand(module.PrivateKeyPass)
+	//	module.Certificate = expand(module.Certificate)
 
 	for _, job := range module.Jobs {
 		metrics := make([]Metric, len(job.Metrics))
