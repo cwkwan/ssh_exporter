@@ -105,7 +105,7 @@ func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, teleme
 	sc.mu.RUnlock()
 
 	registry := prometheus.NewRegistry()
-	c := collector.New(r.Context(), target, m, module, telemetry, logger.With("target", target, "module", m))
+	c := collector.New(r.Context(), query, target, m, module, telemetry, logger.With("target", target, "module", m))
 	registry.MustRegister(c)
 
 	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
