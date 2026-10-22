@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -401,14 +402,23 @@ func hostKeyCallback(m *config.Module, logger *slog.Logger) ssh.HostKeyCallback 
 	}
 }
 
-func New(ctx context.Context, target string, name string, module *config.Module, telemetry *Telemetry, logger *slog.Logger) *Collector {
+func New(ctx context.Context, param url.Values, target string, name string, module *config.Module, telemetry *Telemetry, logger *slog.Logger) *Collector {
 
 	var results []Result
 
-	module.Password = expand(module.Password)
-	module.PrivateKey = expand(module.PrivateKey)
-	module.PrivateKeyPass = expand(module.PrivateKeyPass)
-	module.Certificate = expand(module.Certificate)
+	keys := []*string{&module.Password, &module.PrivateKey, &module.PrivateKeyPass, &module.Certificate}
+
+	for _, key := range keys {
+		*key = expand(*key, func(s string) string {
+			if s[0] == '$' {
+				return os.Getenv(s[1:])
+			}
+			if s[0] == '@' {
+				return param.Get(s[1:])
+			}
+			return ""
+		})
+	}
 
 	for _, job := range module.Jobs {
 		metrics := make([]Metric, len(job.Metrics))

@@ -24,15 +24,27 @@ import (
 func TestExpand(t *testing.T) {
 	v := "testvar"
 	os.Setenv("TESTVAR", v)
+	os.Setenv("TESTVAR2", "z22")
 
+	param := map[string]string{
+		"var": "secret_param",
+	}
 	module := config.Module{
-		Password: "$TESTVAR",
+		Password: "${TESTVAR} -@{Not_exist_var}- @{var} \\@{} \\@{escape} \\${escape}${TESTVAR2}",
 	}
 
-	module.Password = expand(module.Password)
+	module.Password = expand(module.Password, func(s string) string {
+		if s[0] == '$' {
+			return os.Getenv(s[1:])
+		}
+		if s[0] == '@' {
+			return param[s[1:]]
+		}
+		return ""
+	})
 
-	if module.Password != v {
-		t.Errorf(`expand(module.Password) = %v, want %v`, module.Password, v)
+	if module.Password != "testvar -- secret_param \\@{} @{escape} ${escape}z22" {
+		t.Errorf(`expand(module.Password) = %v, want "testvar -- secret_param \@{} @{escape} ${escape}z22"`, module.Password)
 	}
 }
 
