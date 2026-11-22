@@ -48,86 +48,91 @@ func TestExpand(t *testing.T) {
 	}
 }
 
-func TestParse(t *testing.T) {
-	s := map[string]string{
-		"s1": "123",
-		"s2": "456",
-		"c":  "string",
-		"d":  "",
+func Test_parseNaN(t *testing.T) {
+	rs := map[string]string{
+		"c": "string",
+		"d": "",
 	}
 
-	exp := "s1 + s2"
-	v, err := parse(s, exp)
-	if err != nil {
-		t.Errorf(`Error returned from parse(%v, %v). Expect none, err returned: %v`, s, exp, err)
-	}
-	if v != 123456 {
-		t.Errorf(`v = %v, expect 123456`, v)
-	}
-
-	exp = "float(s1) + float(s2)"
-	v, err = parse(s, exp)
-	if err != nil {
-		t.Errorf(`Error returned from parse(%v, %v). Expect none, err returned: %v`, s, exp, err)
-	}
-	if v != 579 {
-		t.Errorf(`v = %v, expect 579`, v)
+	tests := []struct {
+		exp     string
+		wantErr bool
+	}{
+		{"c", true},
+		{"d", true},
+		{"e", true},
 	}
 
-	exp = "float(c)"
-	v, err = parse(s, exp)
-	if !math.IsNaN(v) {
-		t.Errorf(`v = %v, expect math.NaN`, v)
-	}
+	for _, test := range tests {
+		got, err := parse(rs, test.exp)
 
-	exp = "d"
-	v, err = parse(s, exp)
-	if !math.IsNaN(v) {
-		t.Errorf(`v = %v, expect math.NaN`, v)
-	}
-
-	exp = "5"
-	v, err = parse(s, exp)
-	if v != 5 {
-		t.Errorf(`v = %v, expect 5`, v)
+		if (err != nil) != test.wantErr {
+			t.Fatalf("parse() error = %v, wantErr %v", err, test.wantErr)
+		}
+		if !math.IsNaN(got) {
+			t.Errorf("Expecting toFloat() to return NaN")
+		}
 	}
 }
 
-func TestToFloat(t *testing.T) {
-	s := "1.0"
-	v, err := toFloat(s)
-	if err != nil {
-		t.Errorf(`Error returned from toFloat("%v"). Expect none, err returned: %v`, s, err)
-	}
-	if v != 1.0 {
-		t.Errorf(`toFloat("%v"), want %v`, s, v)
+func Test_parse(t *testing.T) {
+	rs := map[string]string{
+		"a": "123",
+		"b": "456",
 	}
 
-	s = "true"
-	v, err = toFloat(s)
-	if err != nil {
-		t.Errorf(`Error returned from toFloat("%v"). Expect none, err returned: %v`, s, err)
-	}
-	if v != 1.0 {
-		t.Errorf(`toFloat("%v"), want %v`, s, v)
-	}
-
-	s = "false"
-	v, err = toFloat(s)
-	if err != nil {
-		t.Errorf(`Error returned from toFloat("%v"). Expect none, err returned: %v`, s, err)
-	}
-	if v != 0.0 {
-		t.Errorf(`toFloat("%v"), want %v`, s, v)
+	tests := []struct {
+		exp     string
+		want    float64
+		wantErr bool
+	}{
+		{"a + b", 123456, false},
+		{"float(a) + float(b)", 579, false},
+		{"7", 7, false},
 	}
 
-	s = ""
-	v, err = toFloat(s)
+	for _, test := range tests {
+		got, err := parse(rs, test.exp)
+
+		if (err != nil) != test.wantErr {
+			t.Fatalf("parse() error = %v, wantErr %v", err, test.wantErr)
+		}
+		if got != test.want {
+			t.Errorf("parse() want = %v, got %v", test.want, got)
+		}
+	}
+}
+
+func Test_toFloat(t *testing.T) {
+	tests := []struct {
+		s       string
+		want    float64
+		wantErr bool
+	}{
+		{"1.1", 1.1, false},
+		{"true", 1.0, false},
+		{"F", 0.0, false},
+	}
+
+	for _, test := range tests {
+		got, err := toFloat(test.s)
+
+		if (err != nil) != test.wantErr {
+			t.Fatalf("toFloat() error = %v, wantErr %v", err, test.wantErr)
+		}
+		if got != test.want {
+			t.Errorf("toFloat() want = %v, got %v", test.want, got)
+		}
+	}
+}
+
+func Test_toFloatNaN(t *testing.T) {
+	got, err := toFloat("")
+
 	if err == nil {
-		t.Errorf(`No Error returned from toFloat("%v"). Expecting error, getting none`, s)
+		t.Errorf("toFloat() should return error when NaN")
 	}
-	if !math.IsNaN(v) {
-		t.Errorf(`toFloat("%v") = %v, expect math.NaN`, s, v)
+	if !math.IsNaN(got) {
+		t.Errorf("Expecting toFloat() to return NaN")
 	}
-
 }

@@ -31,6 +31,10 @@ var (
 	DefaultModuleOpts = Module{
 		StartShell:     false,
 		PrivateKeyPass: "",
+		Eof:            "",
+		Timeout:        5000,
+		CmdTimeout:     1000,
+		KnownHostsFile: "/etc/ssh/ssh_known_hosts",
 	}
 )
 
@@ -42,12 +46,14 @@ type Module struct {
 	User              string      `yaml:"user"`
 	Password          string      `yaml:"password"`
 	StartShell        bool        `yaml:"start_shell,omitempty"`
+	Eof               string      `yaml:"eof"`
+	Timeout           int         `yaml:"timeout"`
+	CmdTimeout        int         `yaml:"cmd_timeout"`
 	PrivateKey        string      `yaml:"private_key"`
 	PrivateKeyPass    string      `yaml:"private_key_passpharse"`
 	Certificate       string      `yaml:"certificate"`
 	KnownHostsFile    string      `yaml:"known_hosts_file"`
 	HostKeyAlgorithms []string    `yaml:"host_key_algorithms"`
-	Timeout           int         `yaml:"timeout"`
 	GrokPatterns      GrokPattern `yaml:"grok_patterns"`
 	Jobs              []Job       `yaml:"jobs"`
 }
