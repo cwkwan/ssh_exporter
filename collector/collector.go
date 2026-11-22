@@ -16,13 +16,12 @@ package collector
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
@@ -51,35 +50,40 @@ type Collector struct {
 	telemetry *Telemetry
 	module    *config.Module
 	logger    *slog.Logger
-	results   []Result
+	results   []result
+	jobs      []job
 }
 
-type Result struct {
-	job     []string
-	data    []byte
-	metrics []Metric
-}
-
-type Metric struct {
-	name                string
-	grok                string
-	continueOnDuplicate bool
-	labelvalues         []string
-	constMetrics        []ConstMetric
-	histograms          []Histogram
-}
-
-type ConstMetric struct {
+type constMetric struct {
 	desc      *prometheus.Desc
 	fqname    string
 	valueType prometheus.ValueType
 	value     string
 }
 
-type Histogram struct {
+type histogram struct {
 	opts       prometheus.HistogramOpts
 	value      string
 	labelnames []string
+}
+
+type job struct {
+	cmds       []string
+	maskedCmds []string
+}
+
+type result struct {
+	data    []byte
+	metrics []metric
+}
+
+type metric struct {
+	name                string
+	grok                string
+	continueOnDuplicate bool
+	labelvalues         []string
+	constMetrics        []constMetric
+	histograms          []histogram
 }
 
 func (c Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -107,7 +111,7 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 	c.telemetry.ScrapeCount.Inc()
 	results, err := run(c, logger)
 	if err != nil {
-		return
+		logger.Warn("Error when scraping", "module", c.name, "module.Eof", c.module.Eof, "target", c.target, "err", err)
 	}
 	duration := time.Since(start).Seconds()
 	c.telemetry.ScrapeInflight.Dec()
@@ -134,7 +138,6 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 				logger.Error("Error parsing result.data with Grok query", "grok", metric.grok, "err", err)
 				return
 			}
-			logger.Debug("resultset", "data", result.data, "matches", matches, "grok", metric.grok, "err", err)
 
 			for _, constMetric := range metric.constMetrics {
 				collected := make(map[uint64]bool)
@@ -179,7 +182,6 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 	duration = time.Since(start).Seconds()
-	logger.Debug("Finished parsing", "duration_seconds", duration)
 	c.telemetry.ScrapeDuration.WithLabelValues(c.name).Observe(duration)
 	scrapeDuration := prometheus.MustNewConstMetric(
 		scrapeDurationDesc,
@@ -189,7 +191,7 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- scrapeDuration
 }
 
-func run(c Collector, logger *slog.Logger) ([]Result, error) {
+func run(c Collector, logger *slog.Logger) ([]result, error) {
 	algorithms := ssh.SupportedAlgorithms()
 	auth, _ := authMethod(c.module, logger)
 	config := &ssh.ClientConfig{
@@ -200,129 +202,40 @@ func run(c Collector, logger *slog.Logger) ([]Result, error) {
 		},
 		User:            c.module.User,
 		Auth:            auth,
+		Timeout:         time.Duration(c.module.Timeout) * time.Millisecond,
 		HostKeyCallback: hostKeyCallback(c.module, logger),
 		// Should check if hostKey algorithm is included in
 		// algorithms.HostKeys.
 		HostKeyAlgorithms: algorithms.HostKeys,
 	}
+	var data [][]byte
+	var err error
 
-	client, err := ssh.Dial("tcp", c.target, config)
+	sshClient := newSSHClient(c.target, config, c.telemetry)
+	defer sshClient.close()
+
+	re, err := regexp.Compile(c.module.Eof)
 	if err != nil {
-		logger.Error("Failed to dial", "err", err)
-		c.telemetry.ScrapeRequestError.Inc()
-		return nil, err
-	}
-	defer client.Close()
-
-	var wg sync.WaitGroup
-	for i := range c.results {
-		wg.Add(1)
-		go func() {
-			data, err := execute(client, c.module.StartShell, c.results[i].job, &wg, logger)
-			if err != nil {
-				logger.Error("Error executing job", "job number", i, "target", c.target, "module", c.module, "err", err)
-				return
-			}
-
-			c.results[i].data = data
-		}()
-		wg.Wait()
+		re, _ = regexp.Compile("")
 	}
 
-	return c.results, nil
-}
-
-func execute(client *ssh.Client, startShell bool, cmds []string, wg *sync.WaitGroup, logger *slog.Logger) ([]byte, error) {
-	defer wg.Done()
-	session, err := client.NewSession()
-	if err != nil {
-		logger.Error("Error creating ssh session", "err", err)
-		return nil, err
-	}
-	defer session.Close()
-
-	reader, err := session.StdoutPipe()
-	if err != nil {
-		logger.Error("Error creating session stdout pipe", "err", err)
-		return nil, err
-	}
-	if startShell {
-		modes := ssh.TerminalModes{
-			ssh.ECHO:          0,
-			ssh.TTY_OP_ISPEED: 115200,
-			ssh.TTY_OP_OSPEED: 115200,
+	if c.module.StartShell {
+		if re.String() == "" {
+			data, err = sshClient.runShellWaitTimeOut(c.module.CmdTimeout, c.jobs, logger)
+		} else {
+			data, err = sshClient.runShellWaitEof(c.module.CmdTimeout, re, c.jobs, logger)
 		}
-
-		if err := session.RequestPty("vt100", 100, 100, modes); err != nil {
-			logger.Error("Error requestinng PTY", "err", err)
-			return nil, err
-		}
-
-		stdinPipe, err := session.StdinPipe()
-		if err != nil {
-			logger.Error("Error creating StdinPipe with PTY session", "err", err)
-			return nil, err
-		}
-
-		if err := session.Shell(); err != nil {
-			logger.Error("Error starting Shell with PTY session", "err", err)
-			return nil, err
-		}
-		go func() {
-			defer stdinPipe.Close()
-			for _, cmd := range cmds {
-				cmd = cmd + "\n"
-				_, err := stdinPipe.Write([]byte(cmd))
-				if err != nil {
-					logger.Error("Error writing cmd to StdinPip", "cmd", cmd, "err", err)
-					return
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-		}()
 	} else {
-		cmd := strings.Join(cmds, ";")
-		if err := session.Start(cmd); err != nil {
-			logger.Error("Error starting command", "cmd", cmd, "err", err)
-			return nil, err
-		}
+		data, err = sshClient.runBulk(c.module.CmdTimeout, c.jobs, logger)
+	}
+	if err != nil {
+		logger.Warn("Non nil error from interactive shell", "target", c.target, "module", c.name, "err", err)
+	}
+	for i := range data {
+		c.results[i].data = data[i]
 	}
 
-	type outputs struct {
-		bytes []byte
-		err   error
-	}
-
-	waitOut := make(chan outputs, 1)
-	go func() {
-		bytes, err := io.ReadAll(reader)
-		waitOut <- outputs{bytes: bytes, err: err}
-		close(waitOut)
-	}()
-
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- session.Wait()
-		close(waitDone)
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-waitDone:
-		result := <-waitOut
-		if err != nil {
-			logger.Warn("Non nil err returned from command starting", "cmds", cmds, "err", err)
-		}
-		if result.err != nil {
-			logger.Error("Error reading bulk session stdout pipe", "err", err)
-			return nil, err
-		}
-		return result.bytes, nil
-	case <-ctx.Done():
-		return nil, errors.New("session execution timed out; abandoning session")
-	}
+	return c.results, err
 }
 
 func authMethod(m *config.Module, logger *slog.Logger) ([]ssh.AuthMethod, error) {
@@ -404,9 +317,10 @@ func hostKeyCallback(m *config.Module, logger *slog.Logger) ssh.HostKeyCallback 
 
 func New(ctx context.Context, param url.Values, target string, name string, module *config.Module, telemetry *Telemetry, logger *slog.Logger) *Collector {
 
-	var results []Result
+	var results []result
+	var jobs []job
 
-	keys := []*string{&module.Password, &module.PrivateKey, &module.PrivateKeyPass, &module.Certificate}
+	keys := []*string{&module.Password, &module.PrivateKey, &module.PrivateKeyPass, &module.Certificate, &module.Eof}
 
 	for _, key := range keys {
 		*key = expand(*key, func(s string) string {
@@ -420,25 +334,25 @@ func New(ctx context.Context, param url.Values, target string, name string, modu
 		})
 	}
 
-	for _, job := range module.Jobs {
-		metrics := make([]Metric, len(job.Metrics))
-		j := 0
-		for parentname, metric := range job.Metrics {
-			labelnames := make([]string, len(metric.Labels))
-			labelvalues := make([]string, len(metric.Labels))
+	for _, j := range module.Jobs {
+		metrics := make([]metric, len(j.Metrics))
+		n := 0
+		for parentname, m := range j.Metrics {
+			labelnames := make([]string, len(m.Labels))
+			labelvalues := make([]string, len(m.Labels))
 			i := 0
-			for k, v := range metric.Labels {
+			for k, v := range m.Labels {
 				labelnames[i] = k
 				labelvalues[i] = v
 				i++
 			}
 
-			gauges := make([]ConstMetric, len(metric.Gauges))
+			gauges := make([]constMetric, len(m.Gauges))
 			i = 0
-			for name, value := range metric.Gauges {
+			for name, value := range m.Gauges {
 				fqname := strings.Join([]string{parentname, name}, "_")
-				g := ConstMetric{
-					desc:      prometheus.NewDesc(fqname, metric.Help, labelnames, nil),
+				g := constMetric{
+					desc:      prometheus.NewDesc(fqname, m.Help, labelnames, nil),
 					fqname:    fqname,
 					valueType: prometheus.GaugeValue,
 					value:     value,
@@ -446,12 +360,12 @@ func New(ctx context.Context, param url.Values, target string, name string, modu
 				gauges[i] = g
 				i++
 			}
-			counters := make([]ConstMetric, len(metric.Counters))
+			counters := make([]constMetric, len(m.Counters))
 			i = 0
-			for name, value := range metric.Counters {
+			for name, value := range m.Counters {
 				fqname := strings.Join([]string{parentname, name}, "_")
-				m := ConstMetric{
-					desc:      prometheus.NewDesc(fqname, metric.Help, labelnames, nil),
+				m := constMetric{
+					desc:      prometheus.NewDesc(fqname, m.Help, labelnames, nil),
 					fqname:    fqname,
 					valueType: prometheus.CounterValue,
 					value:     value,
@@ -461,16 +375,16 @@ func New(ctx context.Context, param url.Values, target string, name string, modu
 			}
 			constMetrics := append(gauges, counters...)
 
-			histograms := make([]Histogram, len(metric.Histograms))
+			histograms := make([]histogram, len(m.Histograms))
 			i = 0
-			for name, value := range metric.Histograms {
+			for name, value := range m.Histograms {
 				fqname := strings.Join([]string{parentname, name}, "_")
-				h := Histogram{
+				h := histogram{
 					opts: prometheus.HistogramOpts{
 						Name:                           fqname,
-						Help:                           metric.Help,
-						NativeHistogramBucketFactor:    metric.BucketFactor,
-						NativeHistogramMaxBucketNumber: metric.BucketNumber,
+						Help:                           m.Help,
+						NativeHistogramBucketFactor:    m.BucketFactor,
+						NativeHistogramMaxBucketNumber: m.BucketNumber,
 					},
 					value:      value,
 					labelnames: labelnames,
@@ -479,21 +393,40 @@ func New(ctx context.Context, param url.Values, target string, name string, modu
 				i++
 			}
 
-			metric := Metric{
+			metric := metric{
 				name:                parentname,
-				grok:                metric.GrokCompile,
-				continueOnDuplicate: metric.ContineOnDuplicate,
+				grok:                m.GrokCompile,
+				continueOnDuplicate: m.ContineOnDuplicate,
 				labelvalues:         labelvalues,
 				constMetrics:        constMetrics,
 				histograms:          histograms,
 			}
-			metrics[j] = metric
-			j++
+			metrics[n] = metric
+			n++
 		}
-		result := Result{
-			job:     job.Commands,
+		result := result{
 			metrics: metrics,
 		}
+
+		cmds := make([]string, len(j.Commands))
+		for i, cmd := range j.Commands {
+			cmd = expand(cmd, func(s string) string {
+				if s[0] == '$' {
+					return os.Getenv(s[1:])
+				}
+				if s[0] == '@' {
+					return param.Get(s[1:])
+				}
+				return ""
+			})
+			cmds[i] = cmd
+		}
+
+		newJob := job{
+			cmds:       cmds,
+			maskedCmds: j.Commands,
+		}
+		jobs = append(jobs, newJob)
 		results = append(results, result)
 	}
 
@@ -505,5 +438,6 @@ func New(ctx context.Context, param url.Values, target string, name string, modu
 		telemetry: telemetry,
 		logger:    logger,
 		results:   results,
+		jobs:      jobs,
 	}
 }

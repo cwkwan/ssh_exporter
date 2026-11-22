@@ -179,7 +179,7 @@ func TestHandler(t *testing.T) {
 			},
 		),
 	}
-	if err := sc.ReloadConfig("./config.yaml"); err != nil {
+	if err := sc.reloadConfig("./config.yaml"); err != nil {
 		t.Fatalf("Error loading config: %s", err)
 	}
 

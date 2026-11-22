@@ -1,0 +1,21 @@
+modules:
+  test:
+    user: test
+    password: test
+    known_hosts_file: /etc/ssh/ssh_known_hosts
+    grok_patterns:
+      df: '%{NOTSPACE:fs}%{SPACE}%{NONNEGINT}%{SPACE}%{NONNEGINT}%{SPACE}%{NONNEGINT:available}%{SPACE}%{NONNEGINT}%%{SPACE}%{UNIXPATH:mount}'
+    jobs:
+    - commands:
+      - df
+      metrics:
+        udev:
+          help: help_message
+          grok_compile: '%{df}'
+          labels:
+            fs: "fs"
+            mount: "mount"
+          gauge:
+            available: 'float(available) + 2'
+          histogram:
+            available_histogram: 'float(available) + 2'

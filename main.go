@@ -16,8 +16,10 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/alecthomas/kingpin/v2"
@@ -44,10 +46,9 @@ const (
 
 var (
 	configFile   = kingpin.Flag("config.file", "Path to configuration file").Default("config.yaml").ExistingFile()
-	hostkeyFile  = kingpin.Flag("hostkey.file", "Path to ssh known_hosts file, default to /etc/ssh/ssh_known_hosts").Default("/etc/ssh/ssh_known_hosts").Strings()
 	toolkitFlags = kingpinflag.AddFlags(kingpin.CommandLine, ":9342")
 
-	sc = &SafeConfig{
+	sc = &safeConfig{
 		C: &config.Config{},
 	}
 
@@ -75,7 +76,7 @@ var (
 	)
 )
 
-type SafeConfig struct {
+type safeConfig struct {
 	mu sync.RWMutex
 	C  *config.Config
 }
@@ -87,6 +88,10 @@ func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, teleme
 		http.Error(w, "'target' must be specified once", http.StatusBadRequest)
 		scrapeRequestError.Inc()
 		return
+	}
+	if _, _, err := net.SplitHostPort(target); err != nil {
+		host := strings.Trim(target, "[]")
+		target = net.JoinHostPort(host, "22")
 	}
 	m := query.Get("module")
 	if len(query["module"]) != 1 || m == "" {
@@ -105,14 +110,14 @@ func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, teleme
 	sc.mu.RUnlock()
 
 	registry := prometheus.NewRegistry()
-	c := collector.New(r.Context(), query, target, m, module, telemetry, logger.With("target", target, "module", m))
+	c := collector.New(r.Context(), query, target, m, module, telemetry, logger.With("target", target))
 	registry.MustRegister(c)
 
 	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	h.ServeHTTP(w, r)
 }
 
-func (sc *SafeConfig) ReloadConfig(configPath string) (err error) {
+func (sc *safeConfig) reloadConfig(configPath string) (err error) {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return err
@@ -132,12 +137,10 @@ func main() {
 	kingpin.Parse()
 
 	logger := promslog.New(promslogConfig)
-
 	logger.Info("Starting ssh_exporter", "version", version.Info())
 	logger.Info("operational information", "build_context", version.BuildContext())
-
 	prometheus.MustRegister(versioncollector.NewCollector("ssh_exporter"))
-	if err := sc.ReloadConfig(*configFile); err != nil {
+	if err := sc.reloadConfig(*configFile); err != nil {
 		logger.Error("Error loading config", "err", err)
 		os.Exit(1)
 	}
