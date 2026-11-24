@@ -1,0 +1,37 @@
+modules:
+  udev:
+    user: test
+    password: test
+    known_hosts_file: test/known_hosts
+    grok_patterns:
+      df: '%{NOTSPACE:fs}%{SPACE}%{NONNEGINT}%{SPACE}%{NONNEGINT}%{SPACE}%{NONNEGINT:available}%{SPACE}%{NONNEGINT}%%{SPACE}%{UNIXPATH:mount}'
+      process: '%{NONNEGINT:pid}%{SPACE}%{process_name:pname}%{SPACE}%{NONNEGINT:pr}%{SPACE}%{NONNEGINT:ni}%{SPACE}%{NONNEGINT:virt}%{SPACE}%{NONNEGINT:res}%{SPACE}%{the_rest}'
+      process_name: '[0-9a-zA-Z_\-\+]+'
+      the_rest: '.*'
+    jobs:
+    - commands:
+      - df
+      metrics:
+        udev:
+          help: help_message
+          grok_compile: '%{df}'
+          labels:
+            fs: "fs"
+            mount: "mount"
+          gauge:
+            available: 'float(available) + 2'
+          histogram:
+            available_histogram: 'float(available) + 2'
+    - commands:
+      - top -n 1 -b
+      metrics:
+        process:
+          help: process_help_message
+          grok_compile: '%{process}'
+          labels:
+            pname: "pname"
+            pid: "pid"
+          gauge:
+            virt: "virt"
+          histogram:
+            virt_histogram: 'virt'

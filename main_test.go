@@ -128,14 +128,14 @@ func TestHandler(t *testing.T) {
 		},
 		PasswordHandler: func(ctx ssh.Context, password string) bool {
 			username := ctx.User()
-			if username == "user" && password == "password" {
+			if username == "test" && password == "test" {
 				return true
 			}
 			return false
 		},
 	}
 
-	if err := sshd.SetOption(ssh.HostKeyFile("./id_ed25519_host")); err != nil {
+	if err := sshd.SetOption(ssh.HostKeyFile("./test/host_key")); err != nil {
 		log.Fatalf("Failed to set host key file: %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestHandler(t *testing.T) {
 			},
 		),
 	}
-	if err := sc.reloadConfig("./config.yaml"); err != nil {
+	if err := sc.reloadConfig("./test/config.yaml"); err != nil {
 		t.Fatalf("Error loading config: %s", err)
 	}
 
