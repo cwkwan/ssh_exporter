@@ -19,30 +19,18 @@ import (
 
 func Test_LoadFile(t *testing.T) {
 	tests := []struct {
-		name    string
 		file    string
-		want    Config
 		wantErr bool
 	}{
-		{
-			name:    "valid config file",
-			file:    "test/config.yaml",
-			wantErr: false,
-		},
-		{
-			name:    "null pointer field skips UnmarshalYAML",
-			file:    "test/no_config.yaml",
-			wantErr: true,
-		},
+		{"test/config.yaml", false},
+		{"test/no_config.yaml", true},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := LoadFile(tt.file)
+		_, err := LoadFile(tt.file)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("yaml.Unmarshal() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+		if (err != nil) != tt.wantErr {
+			t.Errorf("yaml.Unmarshal() error = %v, wantErr %v", err, tt.wantErr)
+		}
 	}
 }

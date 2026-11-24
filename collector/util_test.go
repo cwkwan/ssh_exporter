@@ -67,7 +67,7 @@ func Test_parseNaN(t *testing.T) {
 		got, err := parse(rs, test.exp)
 
 		if (err != nil) != test.wantErr {
-			t.Fatalf("parse() error = %v, wantErr %v", err, test.wantErr)
+			t.Errorf("parse() error = %v, wantErr %v", err, test.wantErr)
 		}
 		if !math.IsNaN(got) {
 			t.Errorf("Expecting toFloat() to return NaN")
@@ -95,7 +95,7 @@ func Test_parse(t *testing.T) {
 		got, err := parse(rs, test.exp)
 
 		if (err != nil) != test.wantErr {
-			t.Fatalf("parse() error = %v, wantErr %v", err, test.wantErr)
+			t.Errorf("parse() error = %v, wantErr %v", err, test.wantErr)
 		}
 		if got != test.want {
 			t.Errorf("parse() want = %v, got %v", test.want, got)
@@ -118,7 +118,7 @@ func Test_toFloat(t *testing.T) {
 		got, err := toFloat(test.s)
 
 		if (err != nil) != test.wantErr {
-			t.Fatalf("toFloat() error = %v, wantErr %v", err, test.wantErr)
+			t.Errorf("toFloat() error = %v, wantErr %v", err, test.wantErr)
 		}
 		if got != test.want {
 			t.Errorf("toFloat() want = %v, got %v", test.want, got)
