@@ -23,6 +23,7 @@ func Test_LoadFile(t *testing.T) {
 		wantErr bool
 	}{
 		{"test/config.yaml", false},
+		{"test/bad_config.yaml", true},
 		{"test/no_config.yaml", true},
 	}
 

@@ -148,6 +148,9 @@ func (s *sshClient) newShellSession() (*ssh.Session, io.WriteCloser, io.Reader, 
 		ssh.TTY_OP_OSPEED: 115200,
 	}
 	session, stdout, err := s.newSession()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	stdin, err := session.StdinPipe()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("Error creating session stdin pipe: %w", err)

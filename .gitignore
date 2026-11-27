@@ -1,6 +1,3 @@
-known_hosts
-id_ed25519_host
+config.yaml
 go.work
 go.wrok.sum
-config.yaml
-config/config.yaml

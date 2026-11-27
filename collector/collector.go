@@ -242,7 +242,10 @@ func authMethod(m *config.Module, logger *slog.Logger) ([]ssh.AuthMethod, error)
 	var auth []ssh.AuthMethod
 
 	if m.Password != "" {
-		auth = append(auth, ssh.Password(m.Password))
+		auth = append(auth, ssh.PasswordCallback(func() (string, error) {
+			logger.Debug("Attempting password authentication")
+			return m.Password, nil
+		}))
 	}
 	if m.PrivateKey != "" {
 		key, err := os.ReadFile(m.PrivateKey)
